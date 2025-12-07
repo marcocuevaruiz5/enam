@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PrepENAM/ENARM Interactivo</title>
+    <!-- React y ReactDOM desde CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-gray-100 min-h-screen p-6">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState, useEffect, useMemo } = React;
+
+      const storage = {
+        get: (key, fallback) => {
+          try {
+            const v = localStorage.getItem(key);
+            return v ? JSON.parse(v) : fallback;
+          } catch (e) {
+            return fallback;
+          }
+        },
+        set: (key, val) => {
+          try {
+            localStorage.setItem(key, JSON.stringify(val));
+          } catch (e) {}
+        },
+      };
+
+      function ProgressBar({ value }) {
+        return (
+          <div className="w-full bg-gray-200 rounded-full h-4">
+            <div
+              className="h-4 rounded-full transition-all duration-300"
+              style={{ width: `${value}%`, background: "linear-gradient(90deg,#06b6d4,#7c3aed)" }}
+            />
+          </div>
+        );
+      }
+
+      function Tabs({ tabs, active, onChange }) {
+        return (
+          <div className="flex gap-2">
+            {tabs.map((t) => (
+              <button
+                key={t}
+                onClick={() => onChange(t)}
+                className={`px-4 py-2 rounded-md ${active === t ? "bg-indigo-600 text-white" : "bg-white border"}`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        );
+      }
+
+      const SAMPLE_SUBJECTS = [
+        { id: "mi", name: "Medicina Interna", items: ["IC por choque", "Hipertensión: metas", "IRA"] },
+        { id: "ped", name: "Pediatría", items: ["Vacunas", "RN", "Diarrea"] },
+        { id: "obs", name: "Obstetricia", items: ["Parto normal", "Preeclampsia", "HPP"] },
+      ];
+
+      const SAMPLE_QUESTIONS = [
+        { id: 1, year: 2020, q: "Paciente con dolor torácico...", a: "IAM" },
+        { id: 2, year: 2021, q: "Fiebre + exantema...", a: "Viral" },
+        { id: 3, year: 2022, q: "Cómo manejar hipotermia...", a: "Recalentamiento" },
+        { id: 4, year: 2023, q: "Causa más frecuente de...?", a: "Diagnóstico X" },
+      ];
+
+      // --- Calendar ---
+      function StudyCalendar() {
+        const [days, setDays] = useState(() => storage.get("cal", Array.from({ length: 30 }, () => false)));
+        useEffect(() => storage.set("cal", days), [days]);
+
+        const completed = days.filter(Boolean).length;
+        const pct = Math.round((completed / days.length) * 100);
+
+        return (
+          <div className="p-4 bg-white rounded shadow">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Calendario de estudio (30 días)</h3>
+              <div className="w-48">
+                <ProgressBar value={pct} />
+                <div className="text-sm mt-1">{completed}/{days.length} días — {pct}%</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-7 gap-2 mt-2">
+              {days.map((d, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    const c = [...days];
+                    c[i] = !c[i];
+                    setDays(c);
+                  }}
+                  className={`p-3 rounded border ${d ? "bg-green-500 text-white" : "bg-gray-50"}`}
+                >
+                  Día {i + 1}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      // --- Subjects with PDF upload + viewer ---
+      function Subjects() {
+        const [subjects, setSubjects] = useState(() =>
+          storage.get(
+            "subjects",
+            SAMPLE_SUBJECTS.map((s) => ({ ...s, checked: s.items.map(() => false), pdf: null }))
+          )
+        );
+
+        const [activePdf, setActivePdf] = useState(null); // {subjectId}
+
+        useEffect(() => storage.set("subjects", subjects), [subjects]);
+
+        // toggle memorization item
+        function toggleItem(subjectId, idx) {
+          setSubjects((prev) => prev.map((s) => {
+            if (s.id !== subjectId) return s;
+            const copy = s.checked.slice();
+            copy[idx] = !copy[idx];
+            return { ...s, checked: copy };
+          }));
+        }
+
+        // handle file upload per subject
+        function handleFile(subjectId, file) {
+          if (!file) return;
+          if (file.type !== 'application/pdf') {
+            alert('Sólo se permiten archivos PDF.');
+            return;
+          }
+          // limit ~5MB for localStorage base64 demo
+          if (file.size > 5 * 1024 * 1024) {
+            alert('El archivo es muy grande. Usa menos de 5 MB para esta demo.');
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const dataUrl = e.target.result; // base64 data URL
+            setSubjects((prev) => prev.map((s) => s.id === subjectId ? { ...s, pdf: { name: file.name, dataUrl } } : s));
+            setActivePdf(subjectId);
+          };
+          reader.readAsDataURL(file);
+        }
+
+        function removePdf(subjectId) {
+          setSubjects((prev) => prev.map((s) => s.id === subjectId ? { ...s, pdf: null } : s));
+          setActivePdf(null);
+        }
+
+        const totalItems = subjects.reduce((acc, s) => acc + s.items.length, 0);
+        const totalDone = subjects.reduce((acc, s) => acc + (s.checked ? s.checked.filter(Boolean).length : 0), 0);
+        const overallPct = totalItems ? Math.round((totalDone / totalItems) * 100) : 0;
+
+        return (
+          <div className="p-4 bg-white rounded shadow md:flex gap-4">
+            <div className="md:w-1/2">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold">Materias y cosas para memorizar</h3>
+                <div className="w-40">
+                  <ProgressBar value={overallPct} />
+                  <div className="text-sm mt-1">{totalDone}/{totalItems} items — {overallPct}%</div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {subjects.map((s) => {
+                  const done = s.checked ? s.checked.filter(Boolean).length : 0;
+                  const pct = s.items.length ? Math.round((done / s.items.length) * 100) : 0;
+                  return (
+                    <div key={s.id} className="p-3 border rounded">
+                      <div className="flex justify-between items-center">
+                        <h4 className="font-medium">{s.name}</h4>
+                        <div className="text-sm">{done}/{s.items.length} — {pct}%</div>
+                      </div>
+
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        {s.items.map((it, i) => (
+                          <label key={i} className="flex items-center gap-2">
+                            <input type="checkbox" checked={s.checked[i]} onChange={() => toggleItem(s.id, i)} />
+                            <span>{it}</span>
+                          </label>
+                        ))}
+                      </div>
+
+                      <div className="mt-3 flex items-center gap-2">
+                        <input
+                          id={`file-${s.id}`}
+                          type="file"
+                          accept="application/pdf"
+                          style={{display: 'none'}}
+                          onChange={(e) => handleFile(s.id, e.target.files[0])}
+                        />
+                        <label htmlFor={`file-${s.id}`} className="px-3 py-2 bg-indigo-100 rounded cursor-pointer">Subir PDF</label>
+
+                        {s.pdf ? (
+                          <>
+                            <button onClick={() => setActivePdf(s.id)} className="px-3 py-2 bg-green-100 rounded">Ver PDF</button>
+                            <button onClick={() => removePdf(s.id)} className="px-3 py-2 bg-red-100 rounded">Eliminar PDF</button>
+                            <div className="text-sm text-gray-600 ml-2">{s.pdf.name}</div>
+                          </>
+                        ) : (
+                          <div className="text-sm text-gray-500">No hay PDF</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="md:w-1/2">
+              <h3 className="text-lg font-semibold mb-2">Visor de PDF</h3>
+              <div className="border rounded h-[600px] bg-gray-50 flex items-center justify-center">
+                {activePdf ? (
+                  (() => {
+                    const s = subjects.find(x => x.id === activePdf);
+                    if (!s || !s.pdf) return <div className="text-sm text-gray-500">PDF no disponible</div>;
+                    return (
+                      <iframe src={s.pdf.dataUrl} width="100%" height="100%" title={s.pdf.name}></iframe>
+                    );
+                  })()
+                ) : (
+                  <div className="text-center text-gray-500 px-4">Selecciona "Ver PDF" en la materia a la izquierda para visualizar el archivo aquí. Puedes subir archivos PDF (máx. 5 MB en esta demo).</div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      // --- Simple Flashcards (Leitner) ---
+      function Flashcards() {
+        const [cards, setCards] = useState(() => storage.get("flashcards", [
+          { id: "f1", front: "Signo de Murphy", back: "Dolor en HCD a la palpación", box: 1, last: null, interval: 1 },
+          { id: "f2", front: "Triada de ...", back: "A, B, C", box: 2, last: null, interval: 2 },
+        ]));
+        const [show, setShow] = useState(null);
+        const [filterDue, setFilterDue] = useState(true);
+
+        useEffect(() => storage.set("flashcards", cards), [cards]);
+
+        function addCard(front, back) {
+          const n = { id: `f${Date.now()}`, front, back, box: 1, last: null, interval: 1 };
+          setCards(c => [n, ...c]);
+        }
+
+        function reviewResult(cardId, correct) {
+          setCards(prev => prev.map(c => {
+            if (c.id !== cardId) return c;
+            if (correct) {
+              const nextBox = Math.min(5, c.box + 1);
+              const interval = [0,1,3,7,14,30][nextBox] || 1;
+              return { ...c, box: nextBox, last: Date.now(), interval };
+            } else {
+              return { ...c, box: 1, last: Date.now(), interval: 1 };
+            }
+          }));
+          setShow(null);
+        }
+
+        const due = useMemo(() => {
+          const now = Date.now();
+          return cards.filter(c => {
+            if (!c.last) return true;
+            const next = c.last + (c.interval || 1) * 24 * 60 * 60 * 1000;
+            return next <= now;
+          });
+        }, [cards]);
+
+        const memorizedPct = Math.round((cards.filter(c => c.box >= 4).length / (cards.length || 1)) * 100);
+
+        return (
+          <div className="p-4 bg-white rounded shadow">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Flashcards (repetición espaciada)</h3>
+              <div className="text-sm">Memorizado: {memorizedPct}%</div>
+            </div>
+            <div className="flex gap-4">
+              <div className="w-1/3">
+                <div className="mb-2 text-sm">Tarjetas totales: {cards.length} — Pendientes: {due.length}</div>
+                <label className="flex items-center gap-2 mb-2"><input type="checkbox" checked={filterDue} onChange={e => setFilterDue(e.target.checked)} /> Mostrar sólo para revisar</label>
+                <div className="space-y-2 max-h-64 overflow-auto">
+                  {(filterDue ? due : cards).map(c => (
+                    <button key={c.id} onClick={() => setShow(c.id)} className="w-full text-left p-2 border rounded hover:bg-gray-50">
+                      <div className="font-medium">{c.front}</div>
+                      <div className="text-xs text-gray-500">Nivel: {c.box} — Intervalo: {c.interval}d</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="w-2/3">
+                {show ? (() => {
+                  const c = cards.find(x => x.id === show);
+                  if (!c) return <div>Tarjeta no encontrada</div>;
+                  return (
+                    <div className="p-4 border rounded">
+                      <div className="text-xl font-semibold mb-4">{c.front}</div>
+                      <div className="mb-6 text-gray-700">{c.back}</div>
+                      <div className="flex gap-2">
+                        <button onClick={() => reviewResult(c.id, true)} className="px-4 py-2 bg-green-100 rounded">Correcto</button>
+                        <button onClick={() => reviewResult(c.id, false)} className="px-4 py-2 bg-red-100 rounded">Incorrecto</button>
+                        <button onClick={() => setShow(null)} className="px-4 py-2 bg-gray-100 rounded">Cerrar</button>
+                      </div>
+                    </div>
+                  );
+                })() : <div className="p-4 border rounded">Selecciona una tarjeta para revisar</div>}
+              </div>
+            </div>
+            <AddCardForm onAdd={addCard} />
+          </div>
+        );
+      }
+
+      function AddCardForm({ onAdd }) {
+        const [f, setF] = useState("");
+        const [b, setB] = useState("");
+        return (
+          <form onSubmit={(e) => { e.preventDefault(); if (!f || !b) return; onAdd(f,b); setF(''); setB(''); }} className="mt-3">
+            <div className="flex gap-2">
+              <input value={f} onChange={e => setF(e.target.value)} placeholder="Frente" className="flex-1 p-2 border rounded" />
+              <input value={b} onChange={e => setB(e.target.value)} placeholder="Reverso" className="flex-1 p-2 border rounded" />
+              <button className="px-4 py-2 bg-indigo-600 text-white rounded">Añadir</button>
+            </div>
+          </form>
+        );
+      }
+
+      // --- Simulators ---
+      function Simulators() {
+        const years = Array.from(new Set(SAMPLE_QUESTIONS.map(q => q.year))).sort((a,b) => b-a);
+        const [selectedYear, setSelectedYear] = useState(years[0] || null);
+        const [randomCount, setRandomCount] = useState(5);
+        const [currentSet, setCurrentSet] = useState([]);
+
+        function loadYear(y) {
+          const set = SAMPLE_QUESTIONS.filter(q => q.year === y);
+          setCurrentSet(set);
+          setSelectedYear(y);
+        }
+
+        function makeRandom() {
+          const pool = SAMPLE_QUESTIONS.slice();
+          const shuffled = pool.sort(() => 0.5 - Math.random()).slice(0, randomCount);
+          setCurrentSet(shuffled);
+          setSelectedYear(null);
+        }
+
+        return (
+          <div className="p-4 bg-white rounded shadow">
+            <h3 className="text-lg font-semibold mb-4">Simuladores</h3>
+            <div className="flex gap-4 mb-4">
+              <div className="flex gap-2 items-center">
+                <label>Año:</label>
+                <select value={selectedYear || ""} onChange={e => loadYear(Number(e.target.value))} className="p-2 border rounded">
+                  <option value="">Selecciona</option>
+                  {years.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <div className="flex gap-2 items-center">
+                <label>Cantidad aleatoria:</label>
+                <input type="number" value={randomCount} onChange={e => setRandomCount(Number(e.target.value))} className="w-20 p-2 border rounded" />
+                <button onClick={makeRandom} className="px-3 py-2 bg-indigo-600 text-white rounded">Crear simulador aleatorio</button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {currentSet.length === 0 ? (
+                <div className="text-sm text-gray-500">Selecciona un año o crea un simulador aleatorio.</div>
+              ) : (
+                currentSet.map((q,i) => (
+                  <div key={q.id} className="p-3 border rounded">
+                    <div className="font-semibold">Pregunta {i+1} ({q.year})</div>
+                    <div className="mt-2">{q.q}</div>
+                    <details className="mt-2 bg-gray-50 p-2 rounded"><summary className="cursor-pointer">Ver respuesta / justificación</summary><div className="mt-2">{q.a}</div></details>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      // --- Main App ---
+      function App() {
+        const tabs = ["Calendario", "Materias", "Flashcards", "Simuladores"];
+        const [active, setActive] = useState("Calendario");
+
+        return (
+          <div className="min-h-screen bg-gradient-to-b from-gray-100 to-white p-6">
+            <div className="max-w-6xl mx-auto">
+              <header className="mb-6 flex items-center justify-between">
+                <div>
+                  <h1 className="text-2xl font-bold">PrepENAM / ENARM — Prototipo interactivo</h1>
+                  <p className="text-sm text-gray-600">Calendario, materias con PDFs visualizables, flashcards y simuladores.</p>
+                </div>
+                <Tabs tabs={tabs} active={active} onChange={setActive} />
+              </header>
+
+              <main className="space-y-6">
+                {active === "Calendario" && <StudyCalendar />}
+                {active === "Materias" && <Subjects />}
+                {active === "Flashcards" && <Flashcards />}
+                {active === "Simuladores" && <Simulators />}
+              </main>
+
+              <footer className="mt-8 text-center text-sm text-gray-500">Prototipo — datos de ejemplo. En producción se usaría Firebase/S3 para almacenar PDFs y usuarios.</footer>
+            </div>
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    </script>
+  </body>
+</html>
